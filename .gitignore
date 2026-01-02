@@ -1,0 +1,4 @@
+image-freq-swap/runs/latest/model.pth
+**/.ipynb_checkpoints/
+**/__pycache__/
+*.pth

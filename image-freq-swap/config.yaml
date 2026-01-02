@@ -3,13 +3,8 @@ seed : 42
 
 # Data settings
 data:
-  real_dir : E:\data\ImageNet\real_imagenet
-  recon_dir : E:\data\ImageNet\recon
-  swapped_dir : E:\data\ImageNet\swapped
-  real_lf_dir : E:\data\ImageNet\real_lf
-  real_hf_dir : E:\data\ImageNet\real_hf
-  recon_lf_dir : E:\data\ImageNet\recon_lf
-  recon_hf_dir : E:\data\ImageNet\recon_hf
+  real_dir : "E:/data/ImageNet/real_imagenet"
+  recon_dir : "E:/data/ImageNet/recon"
 
 # VAE settings for reconstruction
 vae:
@@ -33,8 +28,8 @@ training:
 
 # Model Architecture settings
 model:
-  base_model : "dino"
-  model_name : "facebook/dino2-base"
+  backbone : "dino"
+  model_name : "facebook/dinov2-base"
   num_classes : 2
 
 # Evaluation robustness settings tests:
