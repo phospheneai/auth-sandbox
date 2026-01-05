@@ -16,11 +16,17 @@ from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 from pathlib import Path
 from PIL import Image
 import torchvision.transforms as T
-
+from PIL import Image
+Image.MAX_IMAGE_PIXELS = None  # disables the warning (use with caution!)
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 # -------------------------
 # PATH SETUP
 # -------------------------
-sys.path.append("../models")
+# Replace lines 25-27 with:
+sys.path.append(str(Path(__file__).parent.parent / "models"))
+sys.path.append(str(Path(__file__).parent.parent / "utils"))
+
 from detector import HFLFDetector
 
 from databunch import DataPipeline, paired_collate_fn
@@ -29,47 +35,81 @@ from databunch import DataPipeline, paired_collate_fn
 # ============================================================
 # RAW VALIDATION DATASET (NO AUGMENTATION, NO MIXING)
 # ============================================================
-class RawValDataset(Dataset):
+import torch
+from torch.utils.data import Dataset
+from pathlib import Path
+from PIL import Image
+import torchvision.transforms as T
+import torch
+from torch.utils.data import Dataset
+from pathlib import Path
+from PIL import Image
+import torchvision.transforms as T
+
+class SimpleValDataset(Dataset):
     """
-    Validation dataset:
-      - real images  -> label 0
-      - recon images -> label 1
+    Dataset:
+      - images with 'fake' in path -> label 1
+      - all other images           -> label 0
+      - pad if smaller than target size, center crop if larger
+      - recursive search through nested folders
     """
 
-    def __init__(self, real_dir, recon_dir):
+    def __init__(self, root_dir=r"E:/data/Image_freq_val"):
         self.samples = []
+        self.size = 336
 
-        real_paths = list(Path(real_dir).glob("*"))
-        recon_paths = list(Path(recon_dir).glob("*"))
+        # Recursively collect all files in nested folders
+        all_paths = list(Path(root_dir).rglob("*"))
 
-        for p in real_paths:
-            self.samples.append((p, 0))
+        # Filter only image files
+        valid_exts = {".png", ".jpg", ".jpeg", ".webp"}
+        all_paths = [p for p in all_paths if p.suffix.lower() in valid_exts]
 
-        for p in recon_paths:
-            self.samples.append((p, 1))
+        for p in all_paths:
+            label = 1 if "fake" in str(p).lower() else 0
+            self.samples.append((p, label))
 
+        print("[SimpleValDataset initialized]")
+        print(f"  Total images : {len(self.samples)}")
+        print(f"  Fake images  : {sum(l for _, l in self.samples)}")
+        print(f"  Real images  : {len(self.samples) - sum(l for _, l in self.samples)}")
+
+        # Define transforms including DINOv2 normalization
         self.transform = T.Compose([
-            T.Resize(256),
-            T.CenterCrop(224),
+            T.CenterCrop(self.size),
             T.ToTensor(),
+            T.Normalize(mean=[0.485, 0.456, 0.406],
+                        std=[0.229, 0.224, 0.225])
         ])
-
-        print("[RawValDataset initialized]")
-        print(f"  Real images : {len(real_paths)}")
-        print(f"  Fake images : {len(recon_paths)}")
-        print(f"  Total       : {len(self.samples)}")
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
         path, label = self.samples[idx]
-        img = Image.open(path).convert("RGB")
+
+        try:
+            img = Image.open(path).convert("RGB")
+        except Exception as e:
+            print(f"[Warning] Skipping unreadable file: {path} ({e})")
+            # Return a black image of the right size instead of crashing
+            img = Image.new("RGB", (self.size, self.size), (0, 0, 0))
+
+        w, h = img.size
+        pad_w = max(0, self.size - w)
+        pad_h = max(0, self.size - h)
+
+        # Pad if smaller
+        if pad_w > 0 or pad_h > 0:
+            padding = (pad_w // 2, pad_h // 2,
+                       pad_w - pad_w // 2, pad_h - pad_h // 2)
+            img = T.Pad(padding, fill=0)(img)
+
+        # Apply transform (crop + tensor + normalize)
         img = self.transform(img)
+
         return img, torch.tensor(label, dtype=torch.long)
-
-
-# =========================
 # TRAIN FUNCTION
 # =========================
 def train_epoch(model, loader, criterion, optimizer, device, epoch):
@@ -168,27 +208,32 @@ def main():
     # -------------------------
     # VALIDATION DATASET (RAW)
     # -------------------------
-    val_dataset = RawValDataset(
-        real_dir=config["data"]["real_dir"],
-        recon_dir=config["data"]["recon_dir"]
-    )
-
+    val_dataset = SimpleValDataset()
     val_loader = DataLoader(
         val_dataset,
-        batch_size=config["training"]["batch_size"],
+        batch_size=16,
         shuffle=False,
-        num_workers=4,
+        num_workers=1,
         pin_memory=True
     )
 
     # -------------------------
     # MODEL
     # -------------------------
-    model = HFLFDetector(
-        backbone=config["model"]["backbone"],
-        model_name=config["model"].get("model_name"),
-        num_classes=config["model"]["num_classes"]
-    ).to(device)
+    # model = HFLFDetector(
+    #     backbone=config["model"]["backbone"],
+    #     model_name=config["model"].get("model_name"),
+    #     num_classes=config["model"]["num_classes"]
+    # ).to(device)
+    from detectorlora import DINOv2ModelWithLoRA,LoRALinear
+    model = DINOv2ModelWithLoRA().to(device)
+
+    for name, module in model.named_modules():
+        if isinstance(module, LoRALinear):
+            print("LoRA applied to:", name)
+
+
+    # model.load_state_dict(torch.load("../runs/latest/model.pth"))
 
     criterion = nn.CrossEntropyLoss()
     optimizer = Adam(
@@ -206,26 +251,30 @@ def main():
     # -------------------------
 # TRAINING LOOP
 # -------------------------
+    print(len(val_dataset))
     for epoch in range(1, config["training"]["epochs"] + 1):
+
+
         print(f"\n>>> Starting Epoch {epoch}/{config['training']['epochs']} - Training...")
         train_loss, train_acc = train_epoch(
             model, train_loader, criterion, optimizer, device, epoch
         )
+        torch.save(model.state_dict(), "../runs/latest/checkpoint.pth")
+
         print(f"✓ Training complete. Loss: {train_loss:.4f} | Acc: {train_acc:.4f}")
+
+        print(f"\nEpoch [{epoch}/{config['training']['epochs']}]")
+        print(f"Train | Loss: {train_loss:.4f} | Acc: {train_acc:.4f}")
 
         print(f">>> Starting Validation...")
         val_loss, val_acc, val_f1, val_auc = validate(
             model, val_loader, criterion, device, epoch
         )
         print(f"✓ Validation complete.")
-
-        print(f"\nEpoch [{epoch}/{config['training']['epochs']}]")
-        print(f"Train | Loss: {train_loss:.4f} | Acc: {train_acc:.4f}")
         print(
             f"Val   | Loss: {val_loss:.4f} | "
             f"Acc: {val_acc:.4f} | F1: {val_f1:.4f} | AUC: {val_auc:.4f}"
         )
-
         if val_auc > best_auc:
             best_auc = val_auc
             torch.save(model.state_dict(), "../runs/latest/model.pth")

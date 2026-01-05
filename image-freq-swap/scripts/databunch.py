@@ -17,13 +17,14 @@ class PairedAugmentation:
     """
 
     def __init__(self):
+        self.size = 336
         self.transform = A.Compose(
             [
                 # Ensure min size
-                A.SmallestMaxSize(max_size=224, p=1.0),
+                A.SmallestMaxSize(max_size=self.size, p=1.0),
 
                 # Shared random crop
-                A.RandomCrop(height=224, width=224, p=1.0),
+                A.RandomCrop(height=self.size, width=self.size, p=1.0),
 
                 # JPEG artifacts
                 A.ImageCompression(

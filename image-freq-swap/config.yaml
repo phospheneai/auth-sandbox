@@ -10,7 +10,7 @@ data:
 vae:
   model_name : "stabilityai/sd-vae-ft-mse"
   device : "cuda"
-  batch_size : 8
+  batch_size : 48
 
 # DCT & Frquency settings for swapping
 dct:
@@ -21,8 +21,8 @@ masks:
 
 # training settings
 training:
-  epochs : 50
-  batch_size : 32
+  epochs : 10
+  batch_size : 16
   learning_rate : 0.0001
   weight_decay : 0.00001
 
