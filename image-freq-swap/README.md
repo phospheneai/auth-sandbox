@@ -1,0 +1,1 @@
+A cool way of making AI learn low-level stuffs to be a better detector
